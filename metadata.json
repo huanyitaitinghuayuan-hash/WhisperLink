@@ -1,0 +1,8 @@
+{
+  "name": "WhisperLink P2P",
+  "description": "A secure, serverless peer-to-Peer chat application where messages reside only on your device.",
+  "requestFramePermissions": [
+    "microphone",
+    "camera"
+  ]
+}
