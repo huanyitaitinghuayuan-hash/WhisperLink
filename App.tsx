@@ -16,53 +16,6 @@ const App: React.FC = () => {
   const peerRef = useRef<Peer | null>(null);
   const connRef = useRef<DataConnection | null>(null);
 
-  // Initialize Peer
-  useEffect(() => {
-    // Dynamically import PeerJS to avoid SSR issues if this were a framework, 
-    // though in a raw SPA it's fine. We use a random ID prefix for obscurity.
-    const newPeer = new Peer(`user-${generateShortId()}-${Date.now().toString(36)}`, {
-      debug: 1,
-    });
-
-    newPeer.on('open', (id) => {
-      console.log('My Peer ID:', id);
-      setMyId(id);
-    });
-
-    newPeer.on('connection', (conn) => {
-      console.log('Incoming connection from:', conn.peer);
-      
-      if (connRef.current) {
-        // Already connected, reject new or handle multi-chat (simplified: reject)
-        conn.close();
-        return;
-      }
-
-      handleConnectionSetup(conn);
-    });
-
-    newPeer.on('disconnected', () => {
-        console.log("Peer disconnected from server");
-        // PeerJS auto-reconnect logic could go here
-    });
-
-    newPeer.on('error', (err) => {
-      console.error('Peer error:', err);
-      // If ID is taken (rare with random) or network fails
-      if (connectionStatus === ConnectionStatus.CONNECTING) {
-        setConnectionStatus(ConnectionStatus.ERROR);
-        setTimeout(() => setConnectionStatus(ConnectionStatus.DISCONNECTED), 3000);
-      }
-    });
-
-    peerRef.current = newPeer;
-
-    return () => {
-      newPeer.destroy();
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
   const handleConnectionSetup = (conn: DataConnection) => {
     connRef.current = conn;
     setRemotePeerId(conn.peer);
@@ -95,11 +48,94 @@ const App: React.FC = () => {
   const connectToPeer = (peerId: string) => {
     if (!peerRef.current) return;
     setConnectionStatus(ConnectionStatus.CONNECTING);
-    
+
     // Connect to the remote peer
     const conn = peerRef.current.connect(peerId);
     handleConnectionSetup(conn);
   };
+
+  const attemptReconnect = useCallback(() => {
+    const peer = peerRef.current;
+
+    if (peer?.disconnected) {
+      console.log('Reconnecting peer after visibility change or network drop');
+      peer.reconnect();
+      setConnectionStatus(ConnectionStatus.CONNECTING);
+    }
+
+    if (!connRef.current && remotePeerId && connectionStatus !== ConnectionStatus.CONNECTING) {
+      // If the data channel dropped while we think we are connected, try to reconnect to the last peer.
+      connectToPeer(remotePeerId);
+    }
+  }, [connectionStatus, connectToPeer, remotePeerId]);
+
+  const attemptReconnectRef = useRef(attemptReconnect);
+
+  useEffect(() => {
+    attemptReconnectRef.current = attemptReconnect;
+  }, [attemptReconnect]);
+
+  // Initialize Peer
+  useEffect(() => {
+    // Dynamically import PeerJS to avoid SSR issues if this were a framework,
+    // though in a raw SPA it's fine. We use a random ID prefix for obscurity.
+    const newPeer = new Peer(`user-${generateShortId()}-${Date.now().toString(36)}`, {
+      debug: 1,
+    });
+
+    newPeer.on('open', (id) => {
+      console.log('My Peer ID:', id);
+      setMyId(id);
+    });
+
+    newPeer.on('connection', (conn) => {
+      console.log('Incoming connection from:', conn.peer);
+
+      if (connRef.current) {
+        // Already connected, reject new or handle multi-chat (simplified: reject)
+        conn.close();
+        return;
+      }
+
+      handleConnectionSetup(conn);
+    });
+
+    newPeer.on('disconnected', () => {
+      console.log("Peer disconnected from server");
+      setConnectionStatus(ConnectionStatus.DISCONNECTED);
+      attemptReconnectRef.current();
+    });
+
+    newPeer.on('error', (err) => {
+      console.error('Peer error:', err);
+      // If ID is taken (rare with random) or network fails
+      if (connectionStatus === ConnectionStatus.CONNECTING) {
+        setConnectionStatus(ConnectionStatus.ERROR);
+        setTimeout(() => setConnectionStatus(ConnectionStatus.DISCONNECTED), 3000);
+      }
+    });
+
+    peerRef.current = newPeer;
+
+    return () => {
+      newPeer.destroy();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        attemptReconnect();
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [attemptReconnect]);
 
   const handleDisconnect = useCallback(() => {
     if (connRef.current) {
